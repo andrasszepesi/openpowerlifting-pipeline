@@ -43,10 +43,10 @@ with zip_data.open(csv_filename, mode='r') as f:
     sql_columns = [f'"{col}" TEXT' for col in clean_header]
     columns_string = ", ".join(sql_columns)
     
-    cur.execute(f"DROP TABLE IF EXISTS raw_openpowerlifting;")
-    cur.execute(f"CREATE TABLE raw_openpowerlifting ({columns_string});")
+    cur.execute("TRUNCATE TABLE raw_openpowerlifting;")
+
     conn.commit()
-    print("Table structure created.")
+    print("Table truncated and ready.")
 
     # Prepare Buffer for Elite Lifters
     filtered_buffer = io.StringIO()
