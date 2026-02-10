@@ -1,37 +1,30 @@
 name: Daily Powerlifting Pipeline
 
-# 1. THE TRIGGER: When should this run?
 on:
   schedule:
-    # Run at 06:00 UTC every day
-    - cron: '0 6 * * *'
-  # Also add a "Manual Button" so we can test it right now
-  workflow_dispatch:
+    - cron: '0 6 * * *' # Run at 06:00 UTC daily
+  workflow_dispatch: # Manual run button
 
-# 2. THE JOB: What computer should we use?
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
     
     steps:
-      # Step A: Download your code from the repo
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Step B: Install Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      # Step C: Install the libraries (Toolbox)
+      # --- THE CLEANER INSTALL STEP ---
       - name: Install dependencies
-        run: |
-          pip install requests psycopg2-binary
+        run: pip install -r requirements.txt
+      # --------------------------------
 
-      # Step D: Run the script!
       - name: Run Data Pipeline
         env:
-          # We pass the secret password from GitHub Settings to the script
           NEON_DB_URL: ${{ secrets.NEON_DB_URL }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: python load_data.py
