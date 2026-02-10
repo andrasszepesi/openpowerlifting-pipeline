@@ -110,17 +110,34 @@ else:
         sh = gc.open("powerlifting_data")
         worksheet = sh.sheet1
         
-        # Prepare Data for Sheets
+# ... inside the Google Sheets section ...
+        
         print("Preparing data for Google Sheets...")
-        filtered_buffer.seek(0) # Rewind buffer again
+        filtered_buffer.seek(0)
         csv_reader = csv.reader(filtered_buffer)
-        data_list = list(csv_reader) # Convert CSV buffer to list of lists
+        
+        # Helper: Try to turn text into a number
+        def auto_convert(cell):
+            try:
+                return float(cell)
+            except ValueError:
+                return cell # If it fails (like a name), keep it as text
+
+        # Convert the data
+        raw_data = list(csv_reader)
+        header = raw_data[0]
+        rows = raw_data[1:]
+        
+        # Apply conversion to every cell in every row
+        typed_rows = [[auto_convert(cell) for cell in row] for row in rows]
+        
+        # Combine back
+        final_data = [header] + typed_rows
         
         # Clear and Update
-        print(f"Uploading {len(data_list)} rows to Google Sheets...")
+        print(f"Uploading {len(final_data)} rows to Google Sheets...")
         worksheet.clear()
-        worksheet.update(data_list)
-        print("Success! Data uploaded to Google Sheets.")
+        worksheet.update(final_data)
         
     except Exception as e:
         print(f"Google Sheets Error: {e}")
