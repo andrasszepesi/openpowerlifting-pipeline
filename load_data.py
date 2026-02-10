@@ -4,8 +4,10 @@ import requests
 import zipfile
 import psycopg2
 import csv
+import json
+import gspread
 
-# 1. DOWNLOAD
+# --- PART 1: DOWNLOAD & PROCESS ---
 print("Fetching zipped data from OpenPowerlifting...")
 url = "https://openpowerlifting.gitlab.io/opl-csv/files/openpowerlifting-latest.zip"
 response = requests.get(url)
@@ -22,15 +24,12 @@ if csv_filename is None:
     raise Exception("No CSV file found in the zip archive.")
 print(f"Download complete. Found file: {csv_filename}")
 
-# 2. CONNECT
-print("Connecting to Neon...")
-conn = psycopg2.connect(os.environ["NEON_DB_URL"])
-cur = conn.cursor()
+# Buffer to store clean data for upload
+filtered_buffer = io.StringIO()
+clean_header = []
 
-# 3. DYNAMIC TABLE & FILTER
+# Open CSV and Filter
 print("Processing data (filtering for TotalKg >= 1000)...")
-
-# We open the CSV file inside the zip
 with zip_data.open(csv_filename, mode='r') as f:
     text_file = io.TextIOWrapper(f, encoding='utf-8')
     reader = csv.reader(text_file)
@@ -39,17 +38,7 @@ with zip_data.open(csv_filename, mode='r') as f:
     header = next(reader)
     clean_header = [col.replace('"', '') for col in header]
     
-    # Create Table Dynamically
-    sql_columns = [f'"{col}" TEXT' for col in clean_header]
-    columns_string = ", ".join(sql_columns)
-    
-    cur.execute("TRUNCATE TABLE raw_openpowerlifting;")
-
-    conn.commit()
-    print("Table truncated and ready.")
-
-    # Prepare Buffer for Elite Lifters
-    filtered_buffer = io.StringIO()
+    # Prepare Buffer
     writer = csv.writer(filtered_buffer)
     writer.writerow(clean_header) # Write header to buffer
 
@@ -57,7 +46,6 @@ with zip_data.open(csv_filename, mode='r') as f:
     try:
         total_index = clean_header.index("TotalKg")
     except ValueError:
-        print("Columns found:", clean_header)
         raise Exception("Could not find 'TotalKg' column!")
 
     # Filter Loop
@@ -66,13 +54,11 @@ with zip_data.open(csv_filename, mode='r') as f:
     
     for row in reader:
         row_count += 1
-        
         # Safety check for short rows
         if len(row) <= total_index:
             continue
             
         val_text = row[total_index]
-        
         try:
             val_float = float(val_text)
             if val_float >= 1000.0:
@@ -83,17 +69,58 @@ with zip_data.open(csv_filename, mode='r') as f:
 
     print(f"Filtering done. Kept {kept_count} rows out of {row_count}.")
 
-# 4. UPLOAD
-print("Uploading filtered data...")
-filtered_buffer.seek(0) # Rewind buffer
+# --- PART 2: UPLOAD TO NEON (Postgres) ---
+print("Connecting to Neon...")
+conn = psycopg2.connect(os.environ["NEON_DB_URL"])
+cur = conn.cursor()
 
+# Create Table logic
+sql_columns = [f'"{col}" TEXT' for col in clean_header]
+columns_string = ", ".join(sql_columns)
+
+# We use TRUNCATE to empty the table without breaking the View connection
+cur.execute(f"CREATE TABLE IF NOT EXISTS raw_openpowerlifting ({columns_string});")
+cur.execute("TRUNCATE TABLE raw_openpowerlifting;")
+conn.commit()
+print("Table truncated and ready.")
+
+# Upload to Neon
+filtered_buffer.seek(0) # Rewind buffer to start
 cur.copy_expert(
     sql="COPY raw_openpowerlifting FROM STDIN WITH (FORMAT CSV, HEADER)",
     file=filtered_buffer
 )
-
 conn.commit()
-print("Success! Data uploaded.")
-
+print("Success! Data uploaded to Neon.")
 cur.close()
 conn.close()
+
+# --- PART 3: UPLOAD TO GOOGLE SHEETS ---
+print("Connecting to Google Sheets...")
+
+if "GCP_SA_KEY" not in os.environ:
+    print("Skipping Google Sheets upload (No GCP_SA_KEY found).")
+else:
+    try:
+        # Authenticate using the JSON key from GitHub Secrets
+        key_dict = json.loads(os.environ["GCP_SA_KEY"])
+        gc = gspread.service_account_from_dict(key_dict)
+        
+        # Open the Sheet named 'powerlifting_data'
+        sh = gc.open("powerlifting_data")
+        worksheet = sh.sheet1
+        
+        # Prepare Data for Sheets
+        print("Preparing data for Google Sheets...")
+        filtered_buffer.seek(0) # Rewind buffer again
+        csv_reader = csv.reader(filtered_buffer)
+        data_list = list(csv_reader) # Convert CSV buffer to list of lists
+        
+        # Clear and Update
+        print(f"Uploading {len(data_list)} rows to Google Sheets...")
+        worksheet.clear()
+        worksheet.update(data_list)
+        print("Success! Data uploaded to Google Sheets.")
+        
+    except Exception as e:
+        print(f"Google Sheets Error: {e}")
